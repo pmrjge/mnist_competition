@@ -31,9 +31,6 @@ def load_dataset(filename='./data/train.csv', filename1='./data/test.csv'):
     return jnp.array(train_x), jnp.array(train_y, dtype=jnp.int32), jnp.array(test)
     
 
-
-x, y, test = load_dataset()
-
 def get_generator_parallel(x, y, rng_key, batch_size, num_devices):
     def batch_generator():
         n = x.shape[0]
@@ -47,3 +44,113 @@ def get_generator_parallel(x, y, rng_key, batch_size, num_devices):
     return batch_generator()  
 
 
+def build_forward_fn(num_layers, num_classes=10):
+    def forward_fn(x: jnp.ndarray, is_training: bool = True) -> jnp.ndarray:
+        if num_layers == 18:
+            n = hk.nets.ResNet18(num_classes)
+        elif num_layers == 34:
+            n = hk.nets.ResNet34(num_classes)
+        elif num_layers == 50:
+            n = hk.nets.ResNet50(num_classes)
+        elif num_layers == 101:
+            n = hk.nets.ResNet101(num_classes)
+        elif num_classes == 152:
+            n = hk.nets.ResNet152(num_classes)
+        else:
+            n = hk.nets.ResNet200(num_classes)
+
+        return n(x, is_training=is_training)
+    return forward_fn
+
+@ft.partial(jax.jit, static_argnums=(0, 6, 7))
+def lm_loss_fn(forward_fn, params, state, rng, x, y, is_training: bool = True, num_classes:int = 10) -> jnp.ndarray:
+    y_pred, state = forward_fn(params, state, rng, x, is_training)
+
+    y_hot = jnn.one_hot(y, num_classes=num_classes)
+    return optax.softmax_cross_entropy(y_pred, y_hot), state
+        
+class GradientUpdater:
+    def __init__(self, net_init, loss_fn, optimizer: optax.GradientTransformation):
+        self._net_init = net_init
+        self._loss_fn = loss_fn
+        self._opt = optimizer
+
+    def init(self, master_rng, x):
+        out_rng, init_rng = jax.random.split(master_rng)
+        params, state = self._net_init(init_rng, x)
+        opt_state = self._opt.init(params)
+        return jnp.array(0), out_rng, params, state, opt_state
+
+    def update(self, num_steps, rng, params, state, opt_state, x:jnp.ndarray, y: jnp.ndarray):
+        rng, new_rng = jax.random.split(rng)
+
+        (loss, state), grads = jax.value_and_grad(self._loss_fn, has_aux=True)(params, state, rng, x, y)
+
+        grads = jax.lax.pmean(grads, axis_name='j')
+
+        updates, opt_state = self._opt.update(grads, opt_state, params)
+
+        params = optax.apply_updates(params, updates)
+
+        metrics = {
+            'step': num_steps,
+            'loss': loss,
+        }
+
+        return num_steps + 1, new_rng, params, state, opt_state, metrics
+
+def replicate_tree(t, num_devices):
+    return jax.tree_map(lambda x: jnp.array([x] * num_devices), t)
+
+# training loop
+logging.getLogger().setLevel(logging.INFO)
+grad_clip_value = 1.05
+learning_rate = 0.01
+batch_size = 32
+num_layers = 18
+max_steps = 4000
+num_devices = jax.local_device_count()
+rng = jr.PRNGKey(10)
+
+x, y, test = load_dataset()
+
+rng, rng_key = jr.split(rng)
+
+train_dataset = get_generator_parallel(x, y, rng_key, batch_size, num_devices)
+
+forward_fn = build_forward_fn(num_layers)
+forward_fn = hk.transform_with_state(forward_fn)
+
+forward_apply = forward_fn.apply
+loss_fn = ft.partial(lm_loss_fn, forward_apply)
+
+optimizer = optax.chain(
+        optax.adaptive_grad_clip(grad_clip_value),
+        #optax.sgd(learning_rate=learning_rate, momentum=0.95, nesterov=True),
+        optax.radam(learning_rate=learning_rate)
+    )
+updater = GradientUpdater(forward_fn.init, loss_fn, optimizer)
+
+logging.info('Initializing parameters...')
+
+rng1, rng = jr.split(rng)
+a = next(train_dataset)
+w, z = a
+num_steps, rng, params, state, opt_state = updater.init(rng1, w[0, :, :, :])
+
+params_multi_device = params
+opt_state_multi_device = opt_state
+num_steps_replicated = replicate_tree(num_steps, num_devices)
+rng_replicated = rng
+state_multi_device = state
+
+batch_update = jax.pmap(updater.update, axis_name='j', in_axes=(0, None, None, None, None, 0, 0), out_axes=(0, None, None, None, None, 0))
+
+logging.info('Starting train loop ++++++++...')
+for i, (w, z) in zip(range(max_steps), train_dataset):
+    if (i + 1) % 100 == 0:
+        logging.info(f'Step {i} computing forward-backward pass')
+    num_steps_replicated, rng_replicated, params_multi_device, state_multi_device, opt_state_multi_device, metrics = batch_update(num_steps_replicated, rng_replicated, params_multi_device, state_multi_device, opt_state_multi_device, w, z)
+
+    if (i + 1) % 100 == 0:
+        logging.info(f'At step {i} the loss is {metrics}')
