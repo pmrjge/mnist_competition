@@ -105,12 +105,12 @@ def replicate_tree(t, num_devices):
 # training loop
 logging.getLogger().setLevel(logging.INFO)
 grad_clip_value = 1.0
-learning_rate = 0.001
+learning_rate = 0.0001
 batch_size = 42
 num_layers = 50
-max_steps = 2200
+max_steps = 1900
 num_devices = jax.local_device_count()
-rng = jr.PRNGKey(10)
+rng = jr.PRNGKey(0)
 
 x, y, test = load_dataset()
 
