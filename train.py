@@ -63,11 +63,11 @@ def build_forward_fn(num_layers, num_classes=10):
     return forward_fn
 
 @ft.partial(jax.jit, static_argnums=(0, 6, 7))
-def lm_loss_fn(forward_fn, params, state, rng, x, y, is_training: bool = True, num_classes:int = 10) -> jnp.ndarray:
+def lm_loss_fn(forward_fn, params, state, rng, x, y, is_training: bool = True, num_classes:int = 10):
     y_pred, state = forward_fn(params, state, rng, x, is_training)
 
     y_hot = jnn.one_hot(y, num_classes=num_classes)
-    return optax.softmax_cross_entropy(y_pred, y_hot), state
+    return jnp.mean(optax.softmax_cross_entropy(y_pred, y_hot)), state
         
 class GradientUpdater:
     def __init__(self, net_init, loss_fn, optimizer: optax.GradientTransformation):
@@ -104,15 +104,17 @@ def replicate_tree(t, num_devices):
 
 # training loop
 logging.getLogger().setLevel(logging.INFO)
-grad_clip_value = 1.05
-learning_rate = 0.01
-batch_size = 32
-num_layers = 18
-max_steps = 4000
+grad_clip_value = 1.0
+learning_rate = 0.001
+batch_size = 42
+num_layers = 50
+max_steps = 2200
 num_devices = jax.local_device_count()
 rng = jr.PRNGKey(10)
 
 x, y, test = load_dataset()
+
+print("Number of training examples :::::: ", x.shape[0])
 
 rng, rng_key = jr.split(rng)
 
@@ -154,3 +156,26 @@ for i, (w, z) in zip(range(max_steps), train_dataset):
 
     if (i + 1) % 100 == 0:
         logging.info(f'At step {i} the loss is {metrics}')
+
+logging.info('Starting evaluation loop +++++++++++++++')
+state = state_multi_device
+rng = rng_replicated
+params = params_multi_device
+
+fn = jax.jit(forward_apply, static_argnames=['is_training'])
+
+print("Number of testing examples ::::: ", test.shape[0])
+
+res = np.zeros(test.shape[0], dtype=np.int64)
+n1 = test.shape[0]
+
+count = n1 // 100
+for j in range(count):
+    (rng,) = jr.split(rng, 1)
+    a, b = j * 100, (j + 1) * 100
+    logits, _ = fn(params, state, rng, test[a:b, :, :, :], is_training=False)
+    res[a:b] = np.array(jnp.argmax(jnn.softmax(logits), axis=1), dtype=np.int64)
+
+df = pd.DataFrame({'ImageId': np.arange(1,n1 +1, dtype=np.int64), 'Label': res})
+
+df.to_csv('./data/results.csv', index=False)
