@@ -34,4 +34,16 @@ def load_dataset(filename='./data/train.csv', filename1='./data/test.csv'):
 
 x, y, test = load_dataset()
 
-  
+def get_generator_parallel(x, y, rng_key, batch_size, num_devices):
+    def batch_generator():
+        n = x.shape[0]
+        key = rng_key
+        kk = batch_size // num_devices
+        while True:
+            key, k1 = jax.random.split(key)
+            perm = jax.random.choice(k1, n, shape=(batch_size,))
+            
+            yield x[perm, :, :, :].reshape(num_devices, kk, *x.shape[1:]), y[perm].reshape(num_devices, kk, *y.shape[1:])
+    return batch_generator()  
+
+
