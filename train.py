@@ -25,8 +25,8 @@ def load_dataset(filename='./data/train.csv', filename1='./data/test.csv'):
     train_x = (train_x - 128.0) / 255.0
     test = (test - 128.0) / 255.0
 
-    train_x = np.expand_dims(train_x.reshape((-1, 28, 28)), axis=3)
-    test = np.expand_dims(test.reshape((-1, 28, 28)), axis=3)
+    train_x = train_x.reshape((-1, 28, 28, 1))
+    test = test.reshape((-1, 28, 28, 1))
 
     return jnp.array(train_x), jnp.array(train_y, dtype=jnp.int32), jnp.array(test)
     
@@ -54,10 +54,12 @@ def build_forward_fn(num_layers, num_classes=10):
             n = hk.nets.ResNet50(num_classes)
         elif num_layers == 101:
             n = hk.nets.ResNet101(num_classes)
-        elif num_classes == 152:
+        elif num_layers == 152:
             n = hk.nets.ResNet152(num_classes)
-        else:
+        elif num_layers == 200:
             n = hk.nets.ResNet200(num_classes)
+        else:
+            n = hk.nets.MobileNetV1(num_classes=num_classes)
 
         return n(x, is_training=is_training)
     return forward_fn
@@ -107,8 +109,8 @@ logging.getLogger().setLevel(logging.INFO)
 grad_clip_value = 1.0
 learning_rate = 0.0001
 batch_size = 42
-num_layers = 50
-max_steps = 1900
+num_layers = 1
+max_steps = 6000
 num_devices = jax.local_device_count()
 rng = jr.PRNGKey(0)
 
@@ -176,6 +178,6 @@ for j in range(count):
     logits, _ = fn(params, state, rng, test[a:b, :, :, :], is_training=False)
     res[a:b] = np.array(jnp.argmax(jnn.softmax(logits), axis=1), dtype=np.int64)
 
-df = pd.DataFrame({'ImageId': np.arange(1,n1 +1, dtype=np.int64), 'Label': res})
+df = pd.DataFrame({'ImageId': np.arange(1,n1+1, dtype=np.int64), 'Label': res})
 
 df.to_csv('./data/results.csv', index=False)
