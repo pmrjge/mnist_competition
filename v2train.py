@@ -231,10 +231,11 @@ a = next(train_dataset)
 w, z = a
 num_steps, rng, params, state, opt_state = updater.init(rng1, w[0, :, :, :])
 
+rng1, rng = jr.split(rng)
 params_multi_device = params
 opt_state_multi_device = opt_state
 num_steps_replicated = replicate_tree(num_steps, num_devices)
-rng_replicated = rng
+rng_replicated = rng1
 state_multi_device = state
 
 batch_update = jax.pmap(updater.update, axis_name='j', in_axes=(0, None, None, None, None, 0, 0), out_axes=(0, None, None, None, None, 0))
@@ -249,8 +250,9 @@ for i, (w, z) in zip(range(max_steps), train_dataset):
         logging.info(f'At step {i} the loss is {metrics}')
 
 logging.info('Starting evaluation loop +++++++++++++++')
+rng1, rng = jr.split(rng)
 state = state_multi_device
-rng = rng_replicated
+rng = rng1
 params = params_multi_device
 
 fn = jax.jit(forward_apply, static_argnames=['is_training'])
