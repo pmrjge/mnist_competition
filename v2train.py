@@ -46,6 +46,7 @@ def get_generator_parallel(x, y, rng_key, batch_size, num_devices):
 
 class ConvNetHybrid(hk.Module):
     def __init__(self, dropout=0.5):
+        super(ConvNetHybrid, self).__init__()
         self.dropout = 0.5
         scale_init = hki.Constant(1.0)
         offset_init = hki.Constant(1e-8)
@@ -88,7 +89,7 @@ class ConvNetHybrid(hk.Module):
         x = self.bn()(x, is_training)
         x = jnn.gelu(x, approximate=True)
         
-        x = hk.MaxPool(window_shape=2, strides=2, padding="SAME")(z)
+        x = hk.MaxPool(window_shape=2, strides=2, padding="SAME")(x)
 
         x = hk.Conv2D(256, 3, 1, w_init=lc_init, b_init=hki.Constant(1e-6))(x)
         x = self.bn()(x, is_training)
@@ -97,7 +98,7 @@ class ConvNetHybrid(hk.Module):
         x = self.bn()(x, is_training)
         x = jnn.gelu(x, approximate=True)
         
-        x = hk.MaxPool(window_shape=2, strides=2, padding="SAME")(z)
+        x = hk.MaxPool(window_shape=2, strides=2, padding="SAME")(x)
 
         x = hk.Conv2D(512, 3, 1, w_init=lc_init, b_init=hki.Constant(1e-6))(x)
         x = self.bn()(x, is_training)
@@ -106,22 +107,29 @@ class ConvNetHybrid(hk.Module):
         x = self.bn()(x, is_training)
         x = jnn.gelu(x, approximate=True)
         
-        x = hk.MaxPool(window_shape=2, strides=2, padding="SAME")(z)
+        x = hk.MaxPool(window_shape=2, strides=2, padding="SAME")(x)
 
         x = hk.Conv2D(1024, 3, 1, w_init=lc_init, b_init=hki.Constant(1e-6))(x)
         x = self.bn()(x, is_training)
         x = jnn.gelu(x, approximate=True)
+        x = hk.Conv2D(1024, 3, 1, w_init=lc_init, b_init=hki.Constant(1e-6))(x)
+        x = self.bn()(x, is_training)
+        x = jnn.gelu(x, approximate=True)
+        
+        x = hk.MaxPool(window_shape=2, strides=2, padding="SAME")(x)
+
+        x = hk.Conv2D(2048, 3, 1, w_init=lc_init, b_init=hki.Constant(1e-6))(x)
+        x = self.bn()(x, is_training)
+        x = jnn.gelu(x, approximate=True)
+        x = hk.Conv2D(2048, 3, 1, w_init=lc_init, b_init=hki.Constant(1e-6))(x)
+        x = self.bn()(x, is_training)
+        x = jnn.gelu(x, approximate=True)
+        
+        x = hk.MaxPool(window_shape=2, strides=2, padding="SAME")(x)
 
         y = jnp.mean(x, axis=(1, 2))
 
-        y = hk.Linear(512, w_init=lc_init, b_init=hki.Constant(1e-6))(y)
-        y = jnn.gelu(y, approximate=True)
-
         y = hk.Linear(256, w_init=lc_init, b_init=hki.Constant(1e-6))(y)
-        y = hk.dropout(hk.next_rng_key(), dropout, y)
-        y = jnn.gelu(y, approximate=True)
-
-        y = hk.Linear(64, w_init=lc_init, b_init=hki.Constant(1e-6))(y)
         y = hk.dropout(hk.next_rng_key(), dropout, y)
         y = jnn.gelu(y, approximate=True)
 
@@ -195,11 +203,11 @@ def replicate_tree(t, num_devices):
 # training loop
 logging.getLogger().setLevel(logging.INFO)
 grad_clip_value = 1.0
-learning_rate = 0.0001
+learning_rate = 0.001
 batch_size = 42
 num_layers = -1
 dropout = 0.6
-max_steps = 6000
+max_steps = 1900
 num_devices = jax.local_device_count()
 rng = jr.PRNGKey(0)
 
